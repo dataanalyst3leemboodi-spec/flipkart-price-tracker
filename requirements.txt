@@ -1,9 +1,7 @@
-flask
-flask_sqlalchemy
-apscheduler
+Flask
+Flask-SQLAlchemy
 pandas
+requests
 openpyxl
-selenium
-webdriver-manager
-psycopg2-binary
+beautifulsoup4
 gunicorn
