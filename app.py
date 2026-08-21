@@ -9,7 +9,6 @@ import scraper
 app = Flask(__name__)
 
 # --- RENDER WEB APP URL ---
-# Local scraping ke baad Render DB ko Sync karne ke liye endpoint URL
 RENDER_SYNC_URL = "https://flipkart-price-tracker-y0hp.onrender.com/api/update_price"
 
 # --- SQLITE DATABASE CONNECTION ---
@@ -133,24 +132,24 @@ def save_or_update_seller_data(fsn, sellers_info, is_auto_scheduler=False):
     db.session.commit()
 
 def sync_to_render(fsn, sellers_info):
-    """Helper function to send live data from local system to Render server."""
+    """Helper function to send live data to Render server endpoint."""
     try:
         payload = {
             'fsn': fsn,
             'sellers': sellers_info
         }
-        # Timeout rakha gaya hai taaki local scraping slow na ho agar Render thoda response me delay kare
         requests.post(RENDER_SYNC_URL, json=payload, timeout=5)
     except Exception as e:
         print(f"[SYNC ERROR] Could not push FSN {fsn} to Render: {e}")
 
-def fetch_and_update_fsn(driver, fsn):
-    sellers_info = scraper.extract_all_target_sellers(driver, fsn)
+def fetch_and_update_fsn(fsn):
+    # Driver pass karne ki zaroorat nahi hai (requests-based scraping)
+    sellers_info = scraper.extract_all_target_sellers(None, fsn)
     
     # 1. Local Database update
     save_or_update_seller_data(fsn, sellers_info)
     
-    # 2. Render Cloud Database sync
+    # 2. Render Cloud Sync
     sync_to_render(fsn, sellers_info)
 
 # --- API ENDPOINT FOR SCRAPER CLOUD SYNC ---
@@ -197,12 +196,9 @@ def upload_file():
             
         fsn_list = df[fsn_col[0]].dropna().unique().tolist()
         
-        driver = scraper.setup_driver()
-        try:
-            for fsn in fsn_list:
-                fetch_and_update_fsn(driver, str(fsn).strip())
-        finally:
-            driver.quit()
+        # Safely process FSNs without driver setup or quit calls
+        for fsn in fsn_list:
+            fetch_and_update_fsn(str(fsn).strip())
 
         return jsonify({'status': 'success', 'message': f'{len(fsn_list)} FSNs Processed and Synced!'})
     except Exception as e:
