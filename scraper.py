@@ -11,14 +11,7 @@ import re
 import os
 import pandas as pd
 import requests
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.chrome.service import Service
+from bs4 import BeautifulSoup
 
 # Render Cloud API Sync Endpoint
 RENDER_URL = "https://flipkart-price-tracker-y0hp.onrender.com/api/update_price"
@@ -33,44 +26,12 @@ TARGET_SELLERS = [
     "HSAtlastradeFashion"
 ]
 
-WAIT_TIME = 15
-DELAY_BETWEEN_REQUESTS = 2
-HEADLESS = True
-DEBUG = False
+DELAY_BETWEEN_REQUESTS = 1
 
 
 def setup_driver():
-    options = Options()
-    if HEADLESS:
-        options.add_argument("--headless=new")
-    
-    # Server/Windows Stability Flags
-    options.add_argument("--disable-gpu")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-extensions")
-    options.add_argument("--remote-debugging-port=9222")
-    options.add_argument("--window-size=1200,1800")
-    options.add_argument(
-        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    )
-
-    # 1. Check for Render Custom Chrome Path (installed via build.sh)
-    render_chrome_bin = "/opt/render/project/src/chrome/opt/google/chrome/chrome"
-    # 2. Check for System Chromium Path
-    system_chrome_bin = "/usr/bin/chromium-browser"
-
-    if os.path.exists(render_chrome_bin):
-        options.binary_location = render_chrome_bin
-    elif os.path.exists(system_chrome_bin):
-        options.binary_location = system_chrome_bin
-
-    try:
-        service = Service(ChromeDriverManager().install())
-        return webdriver.Chrome(service=service, options=options)
-    except Exception:
-        return webdriver.Chrome(options=options)
+    # Requests-based scraping doesn't require a browser driver
+    return None
 
 
 def extract_pid_from_url(url: str) -> str:
@@ -92,6 +53,11 @@ def extract_all_target_sellers(driver, fsn: str) -> dict:
     seller_data = {s: "" for s in TARGET_SELLERS}
     url = build_all_sellers_url(fsn)
 
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9'
+    }
+
     seller_patterns = {
         "RetailNet": r"\bretailnet\b",
         "Siril": r"\bsiril\b",
@@ -102,40 +68,35 @@ def extract_all_target_sellers(driver, fsn: str) -> dict:
     }
 
     try:
-        driver.get(url)
-        WebDriverWait(driver, WAIT_TIME).until(
-            EC.presence_of_element_located((By.TAG_NAME, "body"))
-        )
-        time.sleep(2)
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            page_text = soup.get_text(separator="\n")
+            lines = [line.strip() for line in page_text.splitlines() if line.strip()]
 
-        page_text = driver.find_element(By.TAG_NAME, "body").text
-        lines = [line.strip() for line in page_text.splitlines() if line.strip()]
-
-        for i, line in enumerate(lines):
-            line_lower = line.lower()
-            
-            for seller_name, pattern in seller_patterns.items():
-                if re.search(pattern, line_lower, re.IGNORECASE) and not seller_data[seller_name]:
-                    
-                    for j in range(i + 1, min(i + 11, len(lines))):
-                        current_line_lower = lines[j].lower()
+            for i, line in enumerate(lines):
+                line_lower = line.lower()
+                
+                for seller_name, pattern in seller_patterns.items():
+                    if re.search(pattern, line_lower, re.IGNORECASE) and not seller_data[seller_name]:
                         
-                        if any(re.search(p, current_line_lower, re.IGNORECASE) for s, p in seller_patterns.items() if s != seller_name):
-                            break
+                        for j in range(i + 1, min(i + 11, len(lines))):
+                            current_line_lower = lines[j].lower()
                             
-                        price_matches = re.findall(r"₹\s*([\d,]+)", lines[j])
-                        if price_matches:
-                            for p in price_matches:
-                                clean_p = int(p.replace(",", ""))
-                                if clean_p < 5000:
-                                    seller_data[seller_name] = clean_p
-                                    break
-                        
-                        if seller_data[seller_name]:
-                            break
+                            if any(re.search(p, current_line_lower, re.IGNORECASE) for s, p in seller_patterns.items() if s != seller_name):
+                                break
+                                
+                            price_matches = re.findall(r"₹\s*([\d,]+)", lines[j])
+                            if price_matches:
+                                for p in price_matches:
+                                    clean_p = int(p.replace(",", ""))
+                                    if clean_p < 5000:
+                                        seller_data[seller_name] = clean_p
+                                        break
+                            
+                            if seller_data[seller_name]:
+                                break
 
-    except TimeoutException:
-        print(f"  [TIMEOUT] FSN={fsn}")
     except Exception as e:
         print(f"  [ERROR] FSN={fsn} -> {e}")
 
@@ -143,17 +104,13 @@ def extract_all_target_sellers(driver, fsn: str) -> dict:
 
 
 def get_price(fsn: str) -> dict:
-    driver = setup_driver()
-    try:
-        sellers_info = extract_all_target_sellers(driver, fsn)
-        main_price = sellers_info.get("RetailNet") or next((v for v in sellers_info.values() if v), None)
-        return {
-            'title': 'Multi-Seller Product',
-            'price': float(main_price) if main_price else None,
-            'sellers': sellers_info
-        }
-    finally:
-        driver.quit()
+    sellers_info = extract_all_target_sellers(None, fsn)
+    main_price = sellers_info.get("RetailNet") or next((v for v in sellers_info.values() if v), None)
+    return {
+        'title': 'Multi-Seller Product',
+        'price': float(main_price) if main_price else None,
+        'sellers': sellers_info
+    }
 
 
 def process_file(input_path: str, output_path: str, progress_callback=None):
@@ -175,43 +132,38 @@ def process_file(input_path: str, output_path: str, progress_callback=None):
         df[f"{seller} Price"] = ""
 
     total = len(df)
-    driver = setup_driver()
 
-    try:
-        for idx, row in df.iterrows():
-            fsn_value = row[fsn_col]
+    for idx, row in df.iterrows():
+        fsn_value = row[fsn_col]
+        if pd.isna(fsn_value) or not str(fsn_value).strip():
+            if link_col is not None:
+                url = row[link_col]
+                if not pd.isna(url) and str(url).strip().startswith("http"):
+                    fsn_value = extract_pid_from_url(str(url).strip())
             if pd.isna(fsn_value) or not str(fsn_value).strip():
-                if link_col is not None:
-                    url = row[link_col]
-                    if not pd.isna(url) and str(url).strip().startswith("http"):
-                        fsn_value = extract_pid_from_url(str(url).strip())
-                if pd.isna(fsn_value) or not str(fsn_value).strip():
-                    continue
+                continue
 
-            fsn_value = str(fsn_value).strip()
+        fsn_value = str(fsn_value).strip()
 
-            if progress_callback:
-                progress_callback(idx + 1, total, f"Fetching FSN: {fsn_value}")
+        if progress_callback:
+            progress_callback(idx + 1, total, f"Fetching FSN: {fsn_value}")
 
-            sellers_info = extract_all_target_sellers(driver, fsn_value)
+        sellers_info = extract_all_target_sellers(None, fsn_value)
 
-            for seller in TARGET_SELLERS:
-                df.at[idx, f"{seller} Price"] = sellers_info.get(seller, "")
+        for seller in TARGET_SELLERS:
+            df.at[idx, f"{seller} Price"] = sellers_info.get(seller, "")
 
-            # Push Scraped Data directly to Render Cloud URL
-            try:
-                payload = {
-                    "fsn": fsn_value,
-                    "sellers": sellers_info
-                }
-                requests.post(RENDER_URL, json=payload, timeout=5)
-            except Exception as e:
-                print(f"Cloud Push Failed for FSN {fsn_value}: {e}")
+        # Push Scraped Data directly to Render Cloud URL
+        try:
+            payload = {
+                "fsn": fsn_value,
+                "sellers": sellers_info
+            }
+            requests.post(RENDER_URL, json=payload, timeout=5)
+        except Exception as e:
+            print(f"Cloud Push Failed for FSN {fsn_value}: {e}")
 
-            time.sleep(DELAY_BETWEEN_REQUESTS)
-
-    finally:
-        driver.quit()
+        time.sleep(DELAY_BETWEEN_REQUESTS)
 
     df.to_excel(output_path, index=False)
     return output_path
