@@ -29,9 +29,15 @@ TARGET_SELLERS = [
 DELAY_BETWEEN_REQUESTS = 1
 
 
+class DriverDummy:
+    """Dummy class to prevent 'NoneType has no attribute quit' errors in web app calls."""
+    def quit(self):
+        pass
+
+
 def setup_driver():
-    # Requests-based scraping doesn't require a browser driver
-    return None
+    # Returns dummy object so driver.quit() won't throw errors
+    return DriverDummy()
 
 
 def extract_pid_from_url(url: str) -> str:
@@ -132,38 +138,44 @@ def process_file(input_path: str, output_path: str, progress_callback=None):
         df[f"{seller} Price"] = ""
 
     total = len(df)
+    driver = setup_driver()
 
-    for idx, row in df.iterrows():
-        fsn_value = row[fsn_col]
-        if pd.isna(fsn_value) or not str(fsn_value).strip():
-            if link_col is not None:
-                url = row[link_col]
-                if not pd.isna(url) and str(url).strip().startswith("http"):
-                    fsn_value = extract_pid_from_url(str(url).strip())
+    try:
+        for idx, row in df.iterrows():
+            fsn_value = row[fsn_col]
             if pd.isna(fsn_value) or not str(fsn_value).strip():
-                continue
+                if link_col is not None:
+                    url = row[link_col]
+                    if not pd.isna(url) and str(url).strip().startswith("http"):
+                        fsn_value = extract_pid_from_url(str(url).strip())
+                if pd.isna(fsn_value) or not str(fsn_value).strip():
+                    continue
 
-        fsn_value = str(fsn_value).strip()
+            fsn_value = str(fsn_value).strip()
 
-        if progress_callback:
-            progress_callback(idx + 1, total, f"Fetching FSN: {fsn_value}")
+            if progress_callback:
+                progress_callback(idx + 1, total, f"Fetching FSN: {fsn_value}")
 
-        sellers_info = extract_all_target_sellers(None, fsn_value)
+            sellers_info = extract_all_target_sellers(driver, fsn_value)
 
-        for seller in TARGET_SELLERS:
-            df.at[idx, f"{seller} Price"] = sellers_info.get(seller, "")
+            for seller in TARGET_SELLERS:
+                df.at[idx, f"{seller} Price"] = sellers_info.get(seller, "")
 
-        # Push Scraped Data directly to Render Cloud URL
-        try:
-            payload = {
-                "fsn": fsn_value,
-                "sellers": sellers_info
-            }
-            requests.post(RENDER_URL, json=payload, timeout=5)
-        except Exception as e:
-            print(f"Cloud Push Failed for FSN {fsn_value}: {e}")
+            # Push Scraped Data directly to Render Cloud URL
+            try:
+                payload = {
+                    "fsn": fsn_value,
+                    "sellers": sellers_info
+                }
+                requests.post(RENDER_URL, json=payload, timeout=5)
+            except Exception as e:
+                print(f"Cloud Push Failed for FSN {fsn_value}: {e}")
 
-        time.sleep(DELAY_BETWEEN_REQUESTS)
+            time.sleep(DELAY_BETWEEN_REQUESTS)
+
+    finally:
+        if driver is not None and hasattr(driver, 'quit'):
+            driver.quit()
 
     df.to_excel(output_path, index=False)
     return output_path
