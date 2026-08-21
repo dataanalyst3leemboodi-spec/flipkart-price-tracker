@@ -3,6 +3,7 @@ from datetime import datetime
 from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for
 from flask_sqlalchemy import SQLAlchemy
 import pandas as pd
+import scraper
 
 app = Flask(__name__)
 
@@ -126,7 +127,11 @@ def save_or_update_seller_data(fsn, sellers_info, is_auto_scheduler=False):
 
     db.session.commit()
 
-# --- API ENDPOINT FOR LOCAL SCRAPER CLOUD SYNC ---
+def fetch_and_update_fsn(driver, fsn):
+    sellers_info = scraper.extract_all_target_sellers(driver, fsn)
+    save_or_update_seller_data(fsn, sellers_info)
+
+# --- API ENDPOINT FOR SCRAPER CLOUD SYNC ---
 @app.route('/api/update_price', methods=['POST'])
 def api_update_price():
     try:
@@ -154,6 +159,32 @@ def index():
         
     total_fsns = Product.query.count()
     return render_template('index.html', products=products, total_fsns=total_fsns, search_query=search_query)
+
+# --- FILE UPLOAD ROUTE ---
+@app.route('/upload', methods=['POST'])
+def upload_file():
+    try:
+        file = request.files.get('file')
+        if not file:
+            return jsonify({'error': 'No file uploaded'}), 400
+            
+        df = pd.read_excel(file) if file.filename.endswith('.xlsx') else pd.read_csv(file)
+        fsn_col = [c for c in df.columns if 'fsn' in str(c).lower()]
+        if not fsn_col:
+            return jsonify({'error': "Excel me 'FSN' column nahi mila"}), 400
+            
+        fsn_list = df[fsn_col[0]].dropna().unique().tolist()
+        
+        driver = scraper.setup_driver()
+        try:
+            for fsn in fsn_list:
+                fetch_and_update_fsn(driver, str(fsn).strip())
+        finally:
+            driver.quit()
+
+        return jsonify({'status': 'success', 'message': f'{len(fsn_list)} FSNs Processed!'})
+    except Exception as e:
+        return jsonify({'error': f'Failed to process file: {str(e)}'}), 500
 
 # --- ROUTE TO CLEAR ALL DATABASE DATA ---
 @app.route('/clear-database', methods=['POST', 'GET'])
