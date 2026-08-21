@@ -9,6 +9,7 @@ Auto-syncs freshly scraped records to Render Cloud Dashboard.
 import time
 import re
 import os
+import gc
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
@@ -27,6 +28,9 @@ TARGET_SELLERS = [
 ]
 
 DELAY_BETWEEN_REQUESTS = 1
+
+# Global requests session to reuse TCP connections and save RAM
+session = requests.Session()
 
 
 class DriverDummy:
@@ -74,7 +78,7 @@ def extract_all_target_sellers(driver, fsn: str) -> dict:
     }
 
     try:
-        resp = requests.get(url, headers=headers, timeout=10)
+        resp = session.get(url, headers=headers, timeout=7)
         if resp.status_code == 200:
             soup = BeautifulSoup(resp.text, 'html.parser')
             page_text = soup.get_text(separator="\n")
@@ -167,15 +171,19 @@ def process_file(input_path: str, output_path: str, progress_callback=None):
                     "fsn": fsn_value,
                     "sellers": sellers_info
                 }
-                requests.post(RENDER_URL, json=payload, timeout=5)
+                session.post(RENDER_URL, json=payload, timeout=5)
             except Exception as e:
                 print(f"Cloud Push Failed for FSN {fsn_value}: {e}")
+
+            if idx % 5 == 0:
+                gc.collect()
 
             time.sleep(DELAY_BETWEEN_REQUESTS)
 
     finally:
         if driver is not None and hasattr(driver, 'quit'):
             driver.quit()
+        gc.collect()
 
     df.to_excel(output_path, index=False)
     return output_path
