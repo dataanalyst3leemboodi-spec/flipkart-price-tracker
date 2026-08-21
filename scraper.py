@@ -3,12 +3,14 @@ scraper.py
 ----------
 Core Flipkart seller price scraping logic for target sellers:
 RetailNet, Siril, Saara, PETILANTE Online, OptimVRcommerce, HSAtlastradeFashion
+Auto-syncs freshly scraped records to Render Cloud Dashboard.
 """
 
 import time
 import re
 import os
 import pandas as pd
+import requests
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -17,6 +19,9 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.chrome.service import Service
+
+# Render Cloud API Sync Endpoint
+RENDER_URL = "https://flipkart-price-tracker-y0hp.onrender.com/api/update_price"
 
 # Target Sellers List
 TARGET_SELLERS = [
@@ -39,7 +44,7 @@ def setup_driver():
     if HEADLESS:
         options.add_argument("--headless=new")
     
-    # Server/Linux Stability Flags
+    # Server/Windows Stability Flags
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
@@ -51,19 +56,20 @@ def setup_driver():
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     )
 
-    # Check if running on PythonAnywhere / Linux environment
-    chrome_bin = "/usr/bin/chromium-browser"
-    chromedriver_bin = "/usr/usr/bin/chromedriver"
+    # 1. Check for Render Custom Chrome Path (installed via build.sh)
+    render_chrome_bin = "/opt/render/project/src/chrome/opt/google/chrome/chrome"
+    # 2. Check for System Chromium Path
+    system_chrome_bin = "/usr/bin/chromium-browser"
 
-    if os.path.exists(chrome_bin):
-        options.binary_location = chrome_bin
+    if os.path.exists(render_chrome_bin):
+        options.binary_location = render_chrome_bin
+    elif os.path.exists(system_chrome_bin):
+        options.binary_location = system_chrome_bin
 
     try:
-        # Priority 1: Automated Driver Manager
         service = Service(ChromeDriverManager().install())
         return webdriver.Chrome(service=service, options=options)
     except Exception:
-        # Priority 2: Fallback to System Installed Binary (PythonAnywhere compatibility)
         return webdriver.Chrome(options=options)
 
 
@@ -83,15 +89,9 @@ def build_all_sellers_url(fsn: str) -> str:
 
 
 def extract_all_target_sellers(driver, fsn: str) -> dict:
-    """
-    Robust Multi-Seller Extraction:
-    Extracts live pricing for RetailNet, Siril, Saara, PETILANTE Online,
-    OptimVRcommerce, and HSAtlastradeFashion without missing or misaligning prices.
-    """
     seller_data = {s: "" for s in TARGET_SELLERS}
     url = build_all_sellers_url(fsn)
 
-    # Comprehensive, Case-Insensitive Regex Patterns for all 6 Sellers
     seller_patterns = {
         "RetailNet": r"\bretailnet\b",
         "Siril": r"\bsiril\b",
@@ -106,7 +106,7 @@ def extract_all_target_sellers(driver, fsn: str) -> dict:
         WebDriverWait(driver, WAIT_TIME).until(
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
-        time.sleep(2)  # DOM Render Delay for Dynamic Elements
+        time.sleep(2)
 
         page_text = driver.find_element(By.TAG_NAME, "body").text
         lines = [line.strip() for line in page_text.splitlines() if line.strip()]
@@ -115,14 +115,11 @@ def extract_all_target_sellers(driver, fsn: str) -> dict:
             line_lower = line.lower()
             
             for seller_name, pattern in seller_patterns.items():
-                # Case-Insensitive Match for Target Seller Name
                 if re.search(pattern, line_lower, re.IGNORECASE) and not seller_data[seller_name]:
                     
-                    # Scan up to next 10 lines (Bypasses rating badges, SpecialPrice, offers)
                     for j in range(i + 1, min(i + 11, len(lines))):
                         current_line_lower = lines[j].lower()
                         
-                        # Boundary Guard: Stop if we enter another target seller's block
                         if any(re.search(p, current_line_lower, re.IGNORECASE) for s, p in seller_patterns.items() if s != seller_name):
                             break
                             
@@ -130,7 +127,6 @@ def extract_all_target_sellers(driver, fsn: str) -> dict:
                         if price_matches:
                             for p in price_matches:
                                 clean_p = int(p.replace(",", ""))
-                                # Filter out MRP / Strikethrough values (>5000)
                                 if clean_p < 5000:
                                     seller_data[seller_name] = clean_p
                                     break
@@ -201,6 +197,16 @@ def process_file(input_path: str, output_path: str, progress_callback=None):
 
             for seller in TARGET_SELLERS:
                 df.at[idx, f"{seller} Price"] = sellers_info.get(seller, "")
+
+            # Push Scraped Data directly to Render Cloud URL
+            try:
+                payload = {
+                    "fsn": fsn_value,
+                    "sellers": sellers_info
+                }
+                requests.post(RENDER_URL, json=payload, timeout=5)
+            except Exception as e:
+                print(f"Cloud Push Failed for FSN {fsn_value}: {e}")
 
             time.sleep(DELAY_BETWEEN_REQUESTS)
 
