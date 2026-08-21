@@ -1,4 +1,5 @@
 import os
+import gc
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for
 from flask_sqlalchemy import SQLAlchemy
@@ -15,6 +16,9 @@ RENDER_SYNC_URL = "https://flipkart-price-tracker-y0hp.onrender.com/api/update_p
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///site.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
+
+# Global requests session
+sync_session = requests.Session()
 
 # --- MODELS ---
 class Product(db.Model):
@@ -138,18 +142,13 @@ def sync_to_render(fsn, sellers_info):
             'fsn': fsn,
             'sellers': sellers_info
         }
-        requests.post(RENDER_SYNC_URL, json=payload, timeout=5)
+        sync_session.post(RENDER_SYNC_URL, json=payload, timeout=5)
     except Exception as e:
         print(f"[SYNC ERROR] Could not push FSN {fsn} to Render: {e}")
 
 def fetch_and_update_fsn(fsn):
-    # Driver pass karne ki zaroorat nahi hai (requests-based scraping)
     sellers_info = scraper.extract_all_target_sellers(None, fsn)
-    
-    # 1. Local Database update
     save_or_update_seller_data(fsn, sellers_info)
-    
-    # 2. Render Cloud Sync
     sync_to_render(fsn, sellers_info)
 
 # --- API ENDPOINT FOR SCRAPER CLOUD SYNC ---
@@ -196,9 +195,16 @@ def upload_file():
             
         fsn_list = df[fsn_col[0]].dropna().unique().tolist()
         
-        # Safely process FSNs without driver setup or quit calls
-        for fsn in fsn_list:
+        # Clear dataframe from memory
+        del df
+        gc.collect()
+
+        for idx, fsn in enumerate(fsn_list):
             fetch_and_update_fsn(str(fsn).strip())
+            
+            # Har 5 FSN ke baad Garbage collection run hoga
+            if idx % 5 == 0:
+                gc.collect()
 
         return jsonify({'status': 'success', 'message': f'{len(fsn_list)} FSNs Processed and Synced!'})
     except Exception as e:
