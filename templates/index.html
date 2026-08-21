@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flipkart Price History Tracker</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+<div class="container py-4">
+    <h2 class="mb-4">Flipkart Price Tracker & History</h2>
+
+    <!-- Top Stats Bar & Download Action Buttons -->
+    <div class="row mb-4 align-items-center">
+        <div class="col-md-3">
+            <div class="card bg-primary text-white p-3 shadow-sm">
+                <h5 class="mb-1">Total Stored FSNs</h5>
+                <h3 class="mb-0">{{ total_fsns }}</h3>
+            </div>
+        </div>
+        <div class="col-md-9 text-end d-flex justify-content-end gap-2 mt-3 mt-md-0 flex-wrap">
+            <!-- 1. Seller Wise Latest Download Button -->
+            <a href="/download-seller-prices" class="btn btn-success">
+                📥 Download Latest Prices
+            </a>
+            <!-- 2. Price Change History Download Button -->
+            <a href="/download-history" class="btn btn-outline-primary">
+                📜 Download Full History
+            </a>
+            <!-- 3. Clear All Data Button -->
+            <form action="/clear-database" method="POST" onsubmit="return confirm('Kya aap sach me saara FSN data aur history delete karna chahte hain?');">
+                <button type="submit" class="btn btn-danger">
+                    🗑️ Clear All Data
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Upload Section & Search Bar -->
+    <div class="row mb-4">
+        <div class="col-md-7">
+            <div class="card p-3 shadow-sm h-100">
+                <h5 class="mb-3">Upload New FSN File (Excel / CSV)</h5>
+                <form id="uploadForm" class="d-flex gap-2">
+                    <input type="file" name="file" id="fileInput" class="form-control" required>
+                    <button type="submit" class="btn btn-dark px-4" id="uploadBtn">
+                        <span id="btnText">Upload & Process</span>
+                        <span id="btnSpinner" class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
+                    </button>
+                </form>
+
+                <!-- LOADING INDICATOR BOX -->
+                <div id="loadingStatus" class="mt-3 d-none">
+                    <div class="alert alert-info d-flex align-items-center mb-0" role="alert">
+                        <div class="spinner-border text-info me-3" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                        <div>
+                            <strong>Scraping in Progress!</strong><br>
+                            <small id="statusMessage">Flipkart se target sellers ki pricing fetch ho rahi hai... Kripya wait karein.</small>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ERROR / SUCCESS ALERT -->
+                <div id="alertContainer" class="mt-2"></div>
+            </div>
+        </div>
+        <div class="col-md-5 mt-3 mt-md-0">
+            <div class="card p-3 shadow-sm h-100">
+                <h5 class="mb-3">🔍 Search FSN</h5>
+                <form action="/" method="GET" class="d-flex gap-2">
+                    <input type="text" name="search" value="{{ search_query if search_query else '' }}" placeholder="Enter FSN..." class="form-control" required>
+                    <button type="submit" class="btn btn-primary">Search</button>
+                    {% if search_query %}
+                        <a href="/" class="btn btn-outline-danger">Clear</a>
+                    {% endif %}
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Data Table -->
+    <div class="card p-3 shadow-sm">
+        <h5 class="mb-3">Stored FSNs & Multi-Seller Live Prices</h5>
+        <div class="table-responsive">
+            <table class="table table-striped table-hover align-middle mt-2">
+                <thead class="table-dark">
+                    <tr>
+                        <th>FSN</th>
+                        <th>RetailNet</th>
+                        <th>Siril</th>
+                        <th>Saara</th>
+                        <th>PETILANTE Online</th>
+                        <th>OptimVRcommerce</th>
+                        <th>HSAtlastradeFashion</th>
+                        <th>History Updates</th>
+                        <th>Last Checked</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for prod in products %}
+                    <tr>
+                        <td><b>{{ prod.fsn }}</b></td>
+                        
+                        <!-- RetailNet Price -->
+                        <td>
+                            {% if prod.retailnet_price %}
+                                <span class="badge bg-success fs-6">₹{{ prod.retailnet_price }}</span>
+                            {% else %}
+                                <span class="text-muted">-</span>
+                            {% endif %}
+                        </td>
+
+                        <!-- Siril Price -->
+                        <td>
+                            {% if prod.siril_price %}
+                                <span class="badge bg-info text-dark fs-6">₹{{ prod.siril_price }}</span>
+                            {% else %}
+                                <span class="text-muted">-</span>
+                            {% endif %}
+                        </td>
+
+                        <!-- Saara Price -->
+                        <td>
+                            {% if prod.saara_price %}
+                                <span class="badge bg-secondary fs-6">₹{{ prod.saara_price }}</span>
+                            {% else %}
+                                <span class="text-muted">-</span>
+                            {% endif %}
+                        </td>
+
+                        <!-- PETILANTE Online Price -->
+                        <td>
+                            {% if prod.petilante_price %}
+                                <span class="badge bg-warning text-dark fs-6">₹{{ prod.petilante_price }}</span>
+                            {% else %}
+                                <span class="text-muted">-</span>
+                            {% endif %}
+                        </td>
+
+                        <!-- OptimVRcommerce Price -->
+                        <td>
+                            {% if prod.optim_price %}
+                                <span class="badge bg-primary fs-6">₹{{ prod.optim_price }}</span>
+                            {% else %}
+                                <span class="text-muted">-</span>
+                            {% endif %}
+                        </td>
+
+                        <!-- HSAtlastradeFashion Price -->
+                        <td>
+                            {% if prod.hsa_price %}
+                                <span class="badge bg-dark fs-6">₹{{ prod.hsa_price }}</span>
+                            {% else %}
+                                <span class="text-muted">-</span>
+                            {% endif %}
+                        </td>
+
+                        <!-- History Log -->
+                        <td>
+                            {% if prod.history %}
+                                <span class="badge bg-danger mb-1">{{ prod.history|length }} Changes</span>
+                            {% else %}
+                                <span class="text-muted small">No Change</span>
+                            {% endif %}
+                        </td>
+
+                        <td><small class="text-secondary">{{ prod.last_updated.strftime('%d-%b-%Y %I:%M %p') if prod.last_updated else 'N/A' }}</small></td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="9" class="text-center text-muted py-4">
+                            {% if search_query %}
+                                No matching FSN found for "{{ search_query }}".
+                            {% else %}
+                                No FSN data found. Upload an Excel file to get started.
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+document.getElementById('uploadForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    
+    let fileInput = document.getElementById('fileInput');
+    if (!fileInput.files.length) return;
+
+    let formData = new FormData();
+    formData.append('file', fileInput.files[0]);
+
+    // UI Elements
+    let uploadBtn = document.getElementById('uploadBtn');
+    let btnText = document.getElementById('btnText');
+    let btnSpinner = document.getElementById('btnSpinner');
+    let loadingStatus = document.getElementById('loadingStatus');
+    let alertContainer = document.getElementById('alertContainer');
+
+    // UI State: Show Loading & Disable Controls
+    uploadBtn.disabled = true;
+    btnText.innerText = "Processing...";
+    btnSpinner.classList.remove('d-none');
+    loadingStatus.classList.remove('d-none');
+    alertContainer.innerHTML = "";
+
+    try {
+        let res = await fetch('/upload', { method: 'POST', body: formData });
+        let data = await res.json();
+        
+        if (res.ok && data.status === 'success') {
+            alertContainer.innerHTML = `<div class="alert alert-success mt-2">${data.message || 'Processing Complete! Refreshing...'}</div>`;
+            setTimeout(() => {
+                location.reload();
+            }, 1000);
+        } else {
+            alertContainer.innerHTML = `<div class="alert alert-danger mt-2">Error: ${data.error || 'Upload failed.'}</div>`;
+            resetUI();
+        }
+    } catch (err) {
+        alertContainer.innerHTML = `<div class="alert alert-danger mt-2">An error occurred during processing.</div>`;
+        console.error(err);
+        resetUI();
+    }
+
+    function resetUI() {
+        uploadBtn.disabled = false;
+        btnText.innerText = "Upload & Process";
+        btnSpinner.classList.add('d-none');
+        loadingStatus.classList.add('d-none');
+    }
+});
+</script>
+</body>
+</html>

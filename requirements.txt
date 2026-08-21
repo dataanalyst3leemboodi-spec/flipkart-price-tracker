@@ -1,0 +1,8 @@
+flask
+flask_sqlalchemy
+apscheduler
+pandas
+openpyxl
+selenium
+webdriver-manager
+psycopg2-binary
