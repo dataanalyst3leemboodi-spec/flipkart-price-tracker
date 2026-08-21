@@ -2,9 +2,7 @@ import os
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for
 from flask_sqlalchemy import SQLAlchemy
-from apscheduler.schedulers.background import BackgroundScheduler
 import pandas as pd
-import scraper
 
 app = Flask(__name__)
 
@@ -27,7 +25,6 @@ class Product(db.Model):
     hsa_price = db.Column(db.Float, nullable=True)
     last_updated = db.Column(db.DateTime, default=datetime.now)
     last_auto_checked = db.Column(db.DateTime, nullable=True)
-    # Cascade delete added so clearing Product clears history too
     history = db.relationship('PriceHistory', backref='product', lazy=True, cascade="all, delete-orphan")
 
 class PriceHistory(db.Model):
@@ -50,9 +47,8 @@ def parse_float(val):
     except (ValueError, TypeError):
         return None
 
-def fetch_and_update_fsn(driver, fsn, is_auto_scheduler=False):
-    sellers_info = scraper.extract_all_target_sellers(driver, fsn)
-    
+def save_or_update_seller_data(fsn, sellers_info, is_auto_scheduler=False):
+    """Helper function to save/update database records from seller dict."""
     r_price = parse_float(sellers_info.get('RetailNet'))
     si_price = parse_float(sellers_info.get('Siril'))
     sa_price = parse_float(sellers_info.get('Saara'))
@@ -130,22 +126,22 @@ def fetch_and_update_fsn(driver, fsn, is_auto_scheduler=False):
 
     db.session.commit()
 
-# --- DAILY 4:00 PM SCHEDULER ---
-def run_daily_price_check():
-    print(f"[{datetime.now()}] --- Running Daily 4:00 PM Auto Price Check ---")
-    with app.app_context():
-        products = Product.query.all()
-        if products:
-            driver = scraper.setup_driver()
-            try:
-                for prod in products:
-                    fetch_and_update_fsn(driver, prod.fsn, is_auto_scheduler=True)
-            finally:
-                driver.quit()
+# --- API ENDPOINT FOR LOCAL SCRAPER CLOUD SYNC ---
+@app.route('/api/update_price', methods=['POST'])
+def api_update_price():
+    try:
+        data = request.get_json(force=True)
+        fsn = data.get('fsn')
+        sellers = data.get('sellers', {})
+        
+        if not fsn:
+            return jsonify({'status': 'error', 'message': 'FSN missing'}), 400
 
-scheduler = BackgroundScheduler(daemon=True)
-scheduler.add_job(run_daily_price_check, 'cron', hour=16, minute=0)
-scheduler.start()
+        save_or_update_seller_data(fsn, sellers)
+        return jsonify({'status': 'success', 'fsn': fsn}), 200
+
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 # --- ROUTES ---
 @app.route('/')
@@ -158,28 +154,6 @@ def index():
         
     total_fsns = Product.query.count()
     return render_template('index.html', products=products, total_fsns=total_fsns, search_query=search_query)
-
-@app.route('/upload', methods=['POST'])
-def upload_file():
-    file = request.files.get('file')
-    if not file:
-        return jsonify({'error': 'No file uploaded'}), 400
-        
-    df = pd.read_excel(file) if file.filename.endswith('.xlsx') else pd.read_csv(file)
-    fsn_col = [c for c in df.columns if 'fsn' in str(c).lower()]
-    if not fsn_col:
-        return jsonify({'error': "Excel me 'FSN' column nahi mila"}), 400
-        
-    fsn_list = df[fsn_col[0]].dropna().unique().tolist()
-    
-    driver = scraper.setup_driver()
-    try:
-        for fsn in fsn_list:
-            fetch_and_update_fsn(driver, str(fsn).strip(), is_auto_scheduler=False)
-    finally:
-        driver.quit()
-
-    return jsonify({'status': 'success', 'message': f'{len(fsn_list)} FSNs Processed!'})
 
 # --- ROUTE TO CLEAR ALL DATABASE DATA ---
 @app.route('/clear-database', methods=['POST', 'GET'])
@@ -251,7 +225,5 @@ def download_history():
     df.to_excel(output_path, index=False)
     return send_file(output_path, as_attachment=True)
 
-# if __name__ == '__main__':
-#     app.run(debug=True, port=5000)
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
