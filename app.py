@@ -3,9 +3,14 @@ from datetime import datetime
 from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for
 from flask_sqlalchemy import SQLAlchemy
 import pandas as pd
+import requests  # Render API Sync ke liye
 import scraper
 
 app = Flask(__name__)
+
+# --- RENDER WEB APP URL ---
+# Local scraping ke baad Render DB ko Sync karne ke liye endpoint URL
+RENDER_SYNC_URL = "https://flipkart-price-tracker-y0hp.onrender.com/api/update_price"
 
 # --- SQLITE DATABASE CONNECTION ---
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///site.db'
@@ -127,9 +132,26 @@ def save_or_update_seller_data(fsn, sellers_info, is_auto_scheduler=False):
 
     db.session.commit()
 
+def sync_to_render(fsn, sellers_info):
+    """Helper function to send live data from local system to Render server."""
+    try:
+        payload = {
+            'fsn': fsn,
+            'sellers': sellers_info
+        }
+        # Timeout rakha gaya hai taaki local scraping slow na ho agar Render thoda response me delay kare
+        requests.post(RENDER_SYNC_URL, json=payload, timeout=5)
+    except Exception as e:
+        print(f"[SYNC ERROR] Could not push FSN {fsn} to Render: {e}")
+
 def fetch_and_update_fsn(driver, fsn):
     sellers_info = scraper.extract_all_target_sellers(driver, fsn)
+    
+    # 1. Local Database update
     save_or_update_seller_data(fsn, sellers_info)
+    
+    # 2. Render Cloud Database sync
+    sync_to_render(fsn, sellers_info)
 
 # --- API ENDPOINT FOR SCRAPER CLOUD SYNC ---
 @app.route('/api/update_price', methods=['POST'])
@@ -182,7 +204,7 @@ def upload_file():
         finally:
             driver.quit()
 
-        return jsonify({'status': 'success', 'message': f'{len(fsn_list)} FSNs Processed!'})
+        return jsonify({'status': 'success', 'message': f'{len(fsn_list)} FSNs Processed and Synced!'})
     except Exception as e:
         return jsonify({'error': f'Failed to process file: {str(e)}'}), 500
 
