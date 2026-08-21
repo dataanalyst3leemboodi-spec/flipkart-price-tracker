@@ -4,7 +4,7 @@ from datetime import datetime
 from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for
 from flask_sqlalchemy import SQLAlchemy
 import pandas as pd
-import requests  # Render API Sync ke liye
+import requests
 import scraper
 
 app = Flask(__name__)
@@ -57,7 +57,7 @@ def parse_float(val):
         return None
 
 def save_or_update_seller_data(fsn, sellers_info, is_auto_scheduler=False):
-    """Helper function to save/update database records from seller dict."""
+    """Helper function to save/update database records without overwriting existing prices with nulls."""
     r_price = parse_float(sellers_info.get('RetailNet'))
     si_price = parse_float(sellers_info.get('Siril'))
     sa_price = parse_float(sellers_info.get('Saara'))
@@ -66,11 +66,12 @@ def save_or_update_seller_data(fsn, sellers_info, is_auto_scheduler=False):
     hsa_price = parse_float(sellers_info.get('HSAtlastradeFashion'))
 
     all_prices = [r_price, si_price, sa_price, pet_price, opt_price, hsa_price]
-    main_price = r_price or next((v for v in all_prices if v is not None), None)
+    has_valid_new_price = any(v is not None for v in all_prices)
 
     prod = Product.query.filter_by(fsn=fsn).first()
 
     if not prod:
+        main_price = r_price or next((v for v in all_prices if v is not None), None)
         prod = Product(
             fsn=fsn,
             title='Multi-Seller Tracking',
@@ -98,35 +99,38 @@ def save_or_update_seller_data(fsn, sellers_info, is_auto_scheduler=False):
         )
         db.session.add(hist)
     else:
-        has_changed = (
-            prod.retailnet_price != r_price or
-            prod.siril_price != si_price or
-            prod.saara_price != sa_price or
-            prod.petilante_price != pet_price or
-            prod.optim_price != opt_price or
-            prod.hsa_price != hsa_price
-        )
-
-        if has_changed:
-            hist = PriceHistory(
-                product_id=prod.id,
-                retailnet_price=r_price,
-                siril_price=si_price,
-                saara_price=sa_price,
-                petilante_price=pet_price,
-                optim_price=opt_price,
-                hsa_price=hsa_price,
-                changed_at=datetime.now()
+        if has_valid_new_price:
+            has_changed = (
+                (r_price is not None and prod.retailnet_price != r_price) or
+                (si_price is not None and prod.siril_price != si_price) or
+                (sa_price is not None and prod.saara_price != sa_price) or
+                (pet_price is not None and prod.petilante_price != pet_price) or
+                (opt_price is not None and prod.optim_price != opt_price) or
+                (hsa_price is not None and prod.hsa_price != hsa_price)
             )
-            db.session.add(hist)
 
-            prod.current_price = main_price
-            prod.retailnet_price = r_price
-            prod.siril_price = si_price
-            prod.saara_price = sa_price
-            prod.petilante_price = pet_price
-            prod.optim_price = opt_price
-            prod.hsa_price = hsa_price
+            if has_changed:
+                hist = PriceHistory(
+                    product_id=prod.id,
+                    retailnet_price=r_price if r_price is not None else prod.retailnet_price,
+                    siril_price=si_price if si_price is not None else prod.siril_price,
+                    saara_price=sa_price if sa_price is not None else prod.saara_price,
+                    petilante_price=pet_price if pet_price is not None else prod.petilante_price,
+                    optim_price=opt_price if opt_price is not None else prod.optim_price,
+                    hsa_price=hsa_price if hsa_price is not None else prod.hsa_price,
+                    changed_at=datetime.now()
+                )
+                db.session.add(hist)
+
+            if r_price is not None: prod.retailnet_price = r_price
+            if si_price is not None: prod.siril_price = si_price
+            if sa_price is not None: prod.saara_price = sa_price
+            if pet_price is not None: prod.petilante_price = pet_price
+            if opt_price is not None: prod.optim_price = opt_price
+            if hsa_price is not None: prod.hsa_price = hsa_price
+            
+            all_current = [prod.retailnet_price, prod.siril_price, prod.saara_price, prod.petilante_price, prod.optim_price, prod.hsa_price]
+            prod.current_price = prod.retailnet_price or next((v for v in all_current if v is not None), None)
 
         prod.last_updated = datetime.now()
 
